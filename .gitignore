@@ -19,3 +19,10 @@ ipch/
 
 # Runtime
 MyGo.ini
+
+# Support images (keep tracked on GitHub, ignore local changes)
+开发不易，感谢支持wx.jpg
+开发不易，感谢支持zfb.jpg
+
+# Nana static lib (too large, source only)
+MyGo/lib/

@@ -450,6 +450,13 @@ int GoCore::assessMove(int row, int col) const {
 	float centerBonus = std::max(0.0f, 10.0f - dist * 2.0f);
 	score += static_cast<int>(centerBonus);
 
+	// 9. 送死角/低气惩罚：落子后己方块只剩 1 气、无提子收益、且贴着对方棋子
+	//    → 黑下一手随手就能提掉（评估只看落子瞬时，见不到对方反提；
+	//      打吃+濒死紧气可瞬时堆到 200+ 分，罚 80 压不住，故重罚）
+	if (myLibs <= 1 && captureGain == 0 && adjBlack >= 1) {
+		score -= 150;
+	}
+
 	return score;
 }
 
