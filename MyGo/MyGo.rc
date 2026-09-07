@@ -1,0 +1,4 @@
+// MyGo.rc
+#include "Resource.h"
+
+IDI_APP ICON "..\\app.ico"

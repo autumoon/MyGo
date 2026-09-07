@@ -1,0 +1,21 @@
+# Build artifacts
+x64/
+Debug/
+Release/
+ipch/
+*.obj
+*.tlog
+*.lastbuildstate
+*.log
+
+# VS
+.vs/
+*.suo
+*.user
+*.ncb
+*.sdf
+*.opendb
+*.ipch
+
+# Runtime
+MyGo.ini
