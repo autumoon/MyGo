@@ -309,7 +309,11 @@ void GoUI::onPass() {
 	nana::API::refresh_window(*this);
 	updateStatus();
 	if (core.isGameOver()) onGameOver();
-	else if (!core.isBlackTurn() && cmbDifficulty.option() != 3) doAIMove();   // 玩家停一手后 AI 自动应手（双人模式除外）
+	else {
+		if (core.getLastMoveRow() == -1)   // 这一手是 Pass，明确提示（平局时由平局弹框承担）
+			nana::msgbox("停一手") << "已停一手（Pass）。双方连续停一手则平局结束本局。";
+		if (!core.isBlackTurn() && cmbDifficulty.option() != 3) doAIMove();   // 玩家停一手后 AI 自动应手（双人模式除外）
+	}
 }
 void GoUI::playSound(const wchar_t* wavFile) {
 	static std::wstring exeDir;
@@ -440,6 +444,9 @@ void GoUI::doAIMove() {
 	if (core.getLastMoveRow() != -1) {   // AI 确实落子（Pass 时 lastMove 为 -1）
 		bool captured = (core.getCapturesBlack() + core.getCapturesWhite() > capBefore);
 		playSound(captured ? L"capture.wav" : L"place.wav");
+	}
+	else if (!core.isGameOver()) {       // AI 停一手（Pass）：已无合法落子或全局评估分≤0
+		nana::msgbox("停一手") << "AI 选择停一手（Pass）。双方连续停一手则平局结束本局。";
 	}
 	aiThinking = false;
 	nana::API::refresh_window(*this);
@@ -603,16 +610,59 @@ void GoUI::doHeuristicMove() {
 				empty.push_back({ r, c });
 	if (empty.empty() || !core.hasLegalMove()) { core.pass(); return; }
 
+	// 找评估分前三候选
 	int bestScore = -1000000;
 	int bestIdx = 0;
-	for (size_t i = 0; i < empty.size(); ++i) {
+	int secondScore = -1000001;
+	int secondIdx = -1;
+	int thirdScore = -1000002;
+	int thirdIdx = -1;
+	for (int i = 0; i < (int)empty.size(); ++i) {
 		int score = core.assessMove(empty[i].first, empty[i].second);
 		if (score > bestScore) {
-			bestScore = score;
-			bestIdx = static_cast<int>(i);
+			thirdScore = secondScore;  thirdIdx = secondIdx;
+			secondScore = bestScore;   secondIdx = bestIdx;
+			bestScore = score;         bestIdx = i;
+		}
+		else if (score > secondScore) {
+			thirdScore = secondScore;  thirdIdx = secondIdx;
+			secondScore = score;       secondIdx = i;
+		}
+		else if (score > thirdScore) {
+			thirdScore = score;        thirdIdx = i;
 		}
 	}
-	if (!core.placeStone(empty[bestIdx].first, empty[bestIdx].second))
+
+	// A. 全盘无正分点：怎么走都亏 → 放弃（收官不乱填）
+	if (bestScore <= 0) { core.pass(); return; }
+
+	// B. 次优随机化：这一步"怎么走都差不离"（top2 差距小）时，在 top3 里按
+	//    「best − 自身分 +1」为权重加权随机挑一着（拉开差距时概率骤降，
+	//    关键手如救援/提子/送死几乎必选最优）。避免每局开局/平稳步完全一样。
+	int pickIdx = bestIdx;
+	static std::random_device rd;
+	static std::mt19937 gen(rd());
+	// 关键手（白方存在 1 气濒死块）禁止次优随机，必须走最优（救援/对攻）
+	if (secondIdx != -1 && bestScore - secondScore < 15 && !core.whiteInAtari()) {
+		int cands[3] = { bestIdx, secondIdx, thirdIdx };
+		int weights[3] = { 1, 1, 1 };
+		int total = 0;
+		for (int k = 0; k < 3; ++k) {
+			if (cands[k] < 0) break;
+			int w = bestScore - (k == 0 ? bestScore : (k == 1 ? secondScore : thirdScore)) + 1;
+			if (w < 1) w = 1;
+			weights[k] = w;
+			total += w;
+		}
+		unsigned int rr = (unsigned int)(gen() % (total > 0 ? total : 1));
+		int acc = 0;
+		for (int k = 0; k < 3; ++k) {
+			if (cands[k] < 0) break;
+			acc += weights[k];
+			if (rr < (unsigned int)acc) { pickIdx = cands[k]; break; }
+		}
+	}
+	if (!core.placeStone(empty[pickIdx].first, empty[pickIdx].second))
 		core.pass();   // 兜底：选中的点不可下则停一手
 }
 
@@ -655,6 +705,25 @@ void GoUI::doHybridMove() {
 		topCandidates.push_back(empty[idx[i]]);
 	}
 
+	// 核心手保护：白方有 1 气濒死块时，只在"能救它"的候选里做 MC
+	//（否则模拟胜率噪声可能把救援点翻转成攻击点）
+	if (core.whiteInAtari()) {
+		std::vector<std::pair<int, int>> savers;
+		for (auto& p : topCandidates)
+			if (core.weakSaveLevel(p.first, p.second) >= 1) savers.push_back(p);
+		if (!savers.empty()) {
+			topCandidates = savers;
+			// 重建与候选列表对齐的排序索引/分数
+			std::vector<int> sc2;
+			for (auto& p : topCandidates) sc2.push_back(core.assessMove(p.first, p.second));
+			std::vector<size_t> idx2(sc2.size());
+			std::iota(idx2.begin(), idx2.end(), 0);
+			std::sort(idx2.begin(), idx2.end(), [&](size_t a, size_t b) { return sc2[a] > sc2[b]; });
+			scores = sc2;
+			idx = idx2;
+		}
+	}
+
 	// 2. 对候选点进行蒙特卡洛模拟（100次）
 	static std::random_device rd;
 	static std::mt19937 gen(rd());
@@ -695,6 +764,8 @@ bestIdx = static_cast<int>(i);
 		}
 	}
 
+	// A. 全盘无正分综合 → 放弃（收官不乱填，避免负分点送子）
+	if (bestTotal <= 0) { core.pass(); return; }
 	if (!core.placeStone(topCandidates[bestIdx].first, topCandidates[bestIdx].second))
 		core.pass();   // 兜底：选中的点不可下则停一手
 }

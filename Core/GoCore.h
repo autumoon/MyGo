@@ -35,6 +35,8 @@ public:
 	int countLiberties(const std::vector<std::pair<int, int>>& group) const;
 	int assessMove(int row, int col) const;   // 评估空位落子的得分（针对白棋，攻守平衡）
 	int assessMoveSimple(int row, int col) const;  // 简化评估（净发展风格：提子/己方气/连接/中心，不追击不逃命）
+	bool whiteInAtari() const;            // 盘上是否存在 1 气白块（关键手保护：此时禁次优随机）
+	int weakSaveLevel(int row, int col) const;  // 该落点对最弱 1 气白块的补救档位（0无 1缓解 2救活）
 	bool hasLegalMove() const;                // 是否存在任一合法落子点（含劫/自杀排除）
 	struct MoveRecord {                       // 落子记录（棋谱用）
 		int row;          // -1 表示 Pass

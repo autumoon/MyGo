@@ -353,6 +353,23 @@ int GoCore::assessMove(int row, int col) const {
 		}
 	}
 
+	// 落子前：判断最弱濒死块（1 气）是否存在"任何可救点"（能把它气 +1）
+	// 若全盘根本没有任何点能救（已被黑彻底围死），"放任"罚就无意义——
+	// 不罚，避免把远处无关的开阔点也全盘拖成负分、误触发 Pass 弃棋（实测 —80×size 时整盘 max 为负）。
+	// 只有"明明能救却不救"的点才重罚，这才把最高分让给真实救援点。
+	bool rescuePossible = false;
+	if (weakestSeed.first != -1 && weakestLibs <= 1) {
+		for (int rr = 0; rr < boardSize && !rescuePossible; ++rr)
+			for (int cc = 0; cc < boardSize && !rescuePossible; ++cc)
+				if (board[rr][cc] == Cell::Empty) {
+					GoCore probe = *this;
+					if (!probe.placeStone(rr, cc)) continue;
+					auto pwg = probe.findGroup(weakestSeed.first, weakestSeed.second);
+					int pwl = pwg.empty() ? 0 : probe.countLiberties(pwg);
+					if (pwl >= weakestLibs + 1) rescuePossible = true;
+				}
+	}
+
 	// 创建临时副本进行模拟
 	GoCore sim = *this;    // 默认拷贝构造可用
 						   // AI 执白棋（玩家执黑）
@@ -436,8 +453,8 @@ int GoCore::assessMove(int row, int col) const {
 		else if (wLibsAfter == weakestLibs + 1) {
 			score += weakestSize * 40;      // 缓解（如 1气→2气）
 		}
-		else if (weakestLibs <= 1 && wLibsAfter <= weakestLibs) {
-			score -= weakestSize * 80;      // 放任 1 气块被杀，按块大小惩罚（权重 60→80）
+		else if (weakestLibs <= 1 && wLibsAfter <= weakestLibs && rescuePossible) {
+			score -= weakestSize * 40;      // 能救不救，按块大小惩罚（80→40：避免个别小块把全盘打成负分、误触发 Pass 弃棋）
 		}
 	}
 
@@ -458,6 +475,43 @@ int GoCore::assessMove(int row, int col) const {
 	}
 
 	return score;
+}
+
+// ---------- 白方叫吃/救援查询（关键手保护）----------
+// 返回盘上第一个 1 气白块的 seed 与该块大小；无则 seed=(-1,-1)
+static std::pair<int, int> findAtariWhiteBlock(const GoCore& g, int& size) {
+	int n = g.getBoardSize();
+	for (int r = 0; r < n; ++r)
+		for (int c = 0; c < n; ++c)
+			if (g.getCell(r, c) == Cell::White) {
+				auto grp = g.findGroup(r, c);
+				if (grp.empty()) continue;
+				if (g.countLiberties(grp) == 1) {
+					size = static_cast<int>(grp.size());
+					return grp[0];
+				}
+			}
+	size = 0;
+	return std::make_pair(-1, -1);
+}
+
+bool GoCore::whiteInAtari() const {
+	int sz = 0;
+	return findAtariWhiteBlock(*this, sz).first != -1;
+}
+
+int GoCore::weakSaveLevel(int row, int col) const {
+	if (!isInBoard(row, col) || board[row][col] != Cell::Empty) return 0;
+	int sz = 0;
+	std::pair<int, int> seed = findAtariWhiteBlock(*this, sz);
+	if (seed.first == -1) return 0;
+	GoCore sim = *this;
+	if (!sim.placeStone(row, col)) return 0;
+	auto wg = sim.findGroup(seed.first, seed.second);
+	int wl = wg.empty() ? 0 : sim.countLiberties(wg);
+	if (wl >= 3) return 2;   // 1 气 → ≥3 气：救活
+	if (wl == 2) return 1;   // 1 气 → 2 气：缓解
+	return 0;
 }
 
 // ---------- 简化评估：早期"净发展"风格 ----------
